@@ -1,0 +1,159 @@
+---
+title: "Analysis of Weightlifting exercise"
+author: "Balavinayak R"
+date: "March 01, 2018"
+output: html_document
+---
+#Introduction
+This study analyzes data from accelerometers on the belt, forearm, arm & dumbell of 6 participants to predict the manner in which they executed the weightlifting exercise. The *classe* variable in the dataset which holds this information has 5 possible values - Class A through Class E, where Class A corresponds to the correct manner of performing the exercise and Classes B through E are different incorrect executions of the exercise.
+
+#Load the libraries
+```{r echo = FALSE, results = 'hide', message = FALSE, warning = FALSE}
+library(dplyr)
+library(caret)
+library(ranger)
+library(h2o)
+library(rattle)
+```
+
+#Getting & cleaning the data
+The training dataset is downloaded from the URL, https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+```{r, cache = TRUE, comment = ''}
+origData <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+                      stringsAsFactors = FALSE,
+                      na.strings = c("", NA))
+#Inspect the dataset.
+str(origData)
+```
+
+We see that the dataset has missing values in many columns. On inspection, we find that the columns which have most of their values as NA are summary fields like Kurtosis, Skewness, Average, Variance etc. These columns will be removed from the dataset for further processing.
+```{r}
+naCount <- sapply(origData, function(x) sum(is.na(x)))
+nonSummary_fields <- names(naCount[naCount == 0])
+data <- select(origData, nonSummary_fields)
+#Retain only the activity features in the data set.
+data <- data[,8:ncol(data)]
+#Create training & validation datasets in an 80:20 ratio.
+set.seed(10)
+index <- createDataPartition(data$classe, p = 0.8, list = FALSE)
+trainingData <- data[index,]
+validationData <- data[-index,]
+```
+
+This analysis involves a multi-class classification problem. We will use the following algorithms to classify the observations to one of Class A through E.
+- Classification trees
+- Bagging
+- Boosting
+- Random forest
+The *train* function from the *caret* package is used to cross-validate all the models. The built models will be compared against each other in terms of their accuracy & other metrics while predicting on the validation dataset.
+
+A custom *trainControl* object is defined at the outset, to be used with all models built using *train*. The *k-fold cross-validation* technique was preferred to the usual training & test set validation for better accuracy. *k* was chosen as 10 in view of the computational requirements of the more accurate Leave One Out Cross Validation (LOOCV) technique. The Near-zero variance pre-processing method was used to remove predictors with constant or near-constant variance.
+
+##Classification tree
+```{r comment = ''}
+myControl <- trainControl(method = "cv",
+                          number = 10,
+                          verboseIter = FALSE)
+set.seed(10)
+classTreeModel <- train(classe~.,
+                        data = trainingData,
+                        method = "rpart",
+                        trControl = myControl)
+classTreeModel
+#Plot showing the model accuracy for various complexity parameters.
+plot(classTreeModel)
+#Validate the model using the validation dataset.
+valResults <- predict(classTreeModel, validationData)
+confusionMatrix(valResults, validationData$classe)
+fancyRpartPlot(classTreeModel$finalModel)
+```
+
+##Bagging
+```{r comment = ''}
+set.seed(10)
+bgModel <- train(classe ~.,
+                 data = trainingData,
+                 preProcess = "nzv",
+                 method = "treebag",
+                 trControl = myControl
+                 )
+bgModel
+#Plot the top-10 predictors by importance
+plot(varImp(bgModel), top = 10)
+#Validate the model using the validation dataset.
+valResults <- predict(bgModel, validationData)
+confusionMatrix(valResults, validationData$classe)
+```
+
+##Gradient Boosting
+```{r results = "hide", message = FALSE, warning = FALSE}
+set.seed(10)
+h2o.init()
+gradboostModel <- train(classe ~.,
+                 data = trainingData,
+                 preProcess = "nzv",
+                 method = "gbm_h2o",
+                 trControl = myControl
+                 )
+```
+
+```{r message = FALSE, warning = FALSE}
+gradboostModel
+#Plot showing the model accuracy for various no. of iteratios & tree depths.
+plot(gradboostModel)
+#Validate the model using the validation dataset.
+valResults <- predict(gradboostModel, validationData)
+confusionMatrix(valResults, validationData$classe)
+```
+
+##Random Forest
+```{r results = "hide"}
+set.seed(10)
+rfModel <- train(classe ~.,
+                 data = trainingData,
+                 preProcess = "nzv",
+                 method = "ranger",
+                 trControl = myControl
+                 )
+```
+
+```{r}
+#Print model summary
+rfModel
+#Plot showing accuracy per no. of random predictors chosen
+plot(rfModel)
+#Validate the model using the validation dataset.
+valResults <- predict(rfModel, validationData)
+confusionMatrix(valResults, validationData$classe)
+```
+
+
+The **Random Forest** algorithm performed the best against the validation dataset (accuracy of 0.9957), closely followed by the Gradient Boosting technique. However, the gradient boosting algorithm took far longer to process than the random forest code. I use the Random forest algorithm to predict the classes of the test data for the second part of the course project.
+
+#Retrieving the test data
+The testing dataset is downloaded from the URL, https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+```{r, cache = TRUE, comment = ''}
+testData <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",
+                      stringsAsFactors = FALSE,
+                      na.strings = c("", NA))
+#Preprocess the data
+naCount <- sapply(testData, function(x) sum(is.na(x)))
+nonSummary_fields <- names(naCount[naCount == 0])
+data <- select(testData, nonSummary_fields)
+#Retain only the activity features in the data set.
+data <- data[,8:ncol(data) - 1]
+#Use the Random Forest model to predict the classes of the test data.
+(testDataResults <- predict(rfModel, data))
+```
+
+#Conclusion
+From the analysis performed on the dataset to classify the action into one of 5 classes, it is clear that the ensemble methods (bagging, boosting & random forest) perform much better than a classification tree. The better accuracy of the ensemble methods comes with the cost of higher computational requirements. 
+
+
+
+
+
+
+
+
+
